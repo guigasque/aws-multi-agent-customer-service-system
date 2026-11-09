@@ -32,7 +32,21 @@ provisioned as code and verified end-to-end.
 | Task 6 — Observability | CloudWatch INFO logs + X-Ray 100% sampling | 20/20 | ✅ |
 | **Total** | | **120/120** | ✅ |
 
-Screenshots: `test_120_score_part1.png` + `test_120_score_part2.png` (grader) · `x-ray.png` (Service Map).
+### Test suite — 120/120
+
+The full grader run (`python tests/test_agent.py all`). Top of the run (Tasks 2–5) and the final
+score:
+
+![Test suite — Tasks 2/3/4/5 passing](t1.png)
+
+![Test suite — Task 6 passing and Score 120/120 (100%)](t-final.png)
+
+### X-Ray Service Map
+
+The full call chain after `python src/agent_orchestrator.py test`: `NovaMart-Orchestrator` connected
+to all four worker agents and the three Knowledge Base nodes.
+
+![X-Ray Service Map — Orchestrator → workers → Knowledge Bases](x-ray.png)
 
 ---
 
@@ -93,6 +107,8 @@ values, runtime status/env, memory resource, KB ingestion, X-Ray/CloudWatch conf
   ShippingRetriever (`L1EHXML1CO`), WarrantyRetriever (`JKBVLCTK3Z`) **in parallel** (ThreadPoolExecutor)
 - **Result:** ✅ Grounded answer — 60-day Premium return window, 3-year electronics warranty, free
   expedited shipping. Three `KnowledgeBase:*` X-Ray nodes present. (~6–10s, parallel not serial.)
+
+![Parallel retrieval — all three retrievers return, search_all_policies passes](t2.png)
 
 ### Scenario 3 — Math (CUST-003)
 - **Prompt:** "How much would 5 items at $29.99 be with a 10% discount?"
