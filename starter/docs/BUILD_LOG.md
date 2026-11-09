@@ -122,16 +122,17 @@ Account `053471543567` (Udacity `voclabs` sandbox), region `us-east-1`, project 
   Task 6 20).
 - `python src/agent_orchestrator.py test`: return→Inv→Refund→Comm; policy→Policy(3 KBs)→Comm;
   math→Comm. 3 X-Ray traces published (e.g. `1-6aef73a7-...`, `1-6aef73d8-...`, `1-6aef73fb-...`).
-- Deployed `invoke` (CUST-002, premium policy) returned a grounded, guardrailed reply via AgentCore
-  Runtime (trace `1-6aef7424-...`). Full production path confirmed, not just local.
+- Deployed `invoke` (CUST-002, premium policy) returned a reply through AgentCore Runtime with the
+  guardrail attached and an X-Ray trace (`1-6aef7424-...`) — the deployed path, not just local.
 - Wave 8 ✅.
 
 ## Wave 9 — docs + teardown
-- Doc set finalized (HOW_IT_WORKS, ARCHITECTURE, HOW_TO_RUN, this BUILD_LOG) with real IDs + the KB
-  incident/fix. Task statuses in tasks.md marked honestly.
-- Teardown dry-run (`python infrastructure/cleanup.py`) confirmed it discovers all project resources,
-  including the code-created `novamart-*` KBs, and correctly keeps the shared AgentCore role. Run with
-  `--yes` to delete after screenshots are captured.
+- Doc set written and later rewritten in plainer prose (HOW_IT_WORKS, ARCHITECTURE, HOW_TO_RUN, this
+  BUILD_LOG) with the real IDs and the KB incident/fix. Task statuses in tasks.md marked honestly.
+  `evidence/README.md` added as the illustrated report (screenshots embedded).
+- Teardown dry-run (`python infrastructure/cleanup.py`) found all project resources, including the
+  code-created `novamart-*` KBs, and kept the shared AgentCore role. Run with `--yes` to delete after
+  the screenshots are captured.
 - Wave 9 ✅.
 
 ---
@@ -139,6 +140,6 @@ Account `053471543567` (Udacity `voclabs` sandbox), region `us-east-1`, project 
 ## Submission checklist
 - [x] `src/agent_orchestrator.py` — all TODOs implemented (Tasks 2/3/4/6).
 - [x] `.env` populated: 3 KB IDs, runtime ARN, guardrail id + numbered version. Gitignored.
-- [ ] Screenshot: `python tests/test_agent.py all` → 120/120 (operator captures).
-- [ ] Screenshot: X-Ray Service Map after `python src/agent_orchestrator.py test` (operator captures).
-- [ ] After screenshots: `python infrastructure/cleanup.py --yes` to stop billing.
+- [x] Screenshot: `python tests/test_agent.py all` → 120/120 (`evidence/t1.png` + `t-final.png`).
+- [x] Screenshot: X-Ray Service Map (`evidence/x-ray.png`) — all 8 nodes, reviewer-approved.
+- [ ] After final use: `python infrastructure/cleanup.py --yes` to stop billing.

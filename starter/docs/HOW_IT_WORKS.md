@@ -1,18 +1,18 @@
 # How it works — NovaMart multi-agent support
 
-Start here. This is the narrative of what the system does and how a request flows through it.
+Start here: what the system does and how a request moves through it.
 
 ## The idea
 
-NovaMart's support desk gets thousands of requests a day: "where's my order", "can I return this",
-"what's the warranty", "how much is 5 of these with 10% off". This system answers them automatically
-with five cooperating AI agents instead of a human agent looking things up by hand.
+NovaMart's support desk gets thousands of requests a day — "where's my order", "can I return this",
+"what's the warranty", "how much is 5 of these with 10% off". This system answers them with five
+agents instead of a person looking things up by hand.
 
-One **Orchestrator** reads the request, decides who should handle it, and hands off to specialists.
-The specialists never talk to each other — they each do one job and write what they found into a
-single shared record in DynamoDB (the **WorkflowState**). The Orchestrator reads that record between
-steps and, at the very end, always asks the **Communication** agent to write the actual reply the
-customer sees. The Orchestrator itself never writes the customer-facing message.
+An **Orchestrator** reads the request, decides who should handle it, and hands off to the
+specialists. The specialists don't talk to each other — each does one job and writes what it found
+into a shared DynamoDB record (the **WorkflowState**). The Orchestrator reads that record between
+steps and, at the end, always asks the **Communication** agent to write the reply the customer sees.
+The Orchestrator never writes that reply itself.
 
 ## The five agents
 
@@ -22,9 +22,9 @@ customer sees. The Orchestrator itself never writes the customer-facing message.
   no decisions.
 - **Refund** (Sonnet, 0.1) — decides return eligibility using the facts Inventory gathered and the
   tier window (Standard = 30 days, Premium = 60 days), then records the return.
-- **Policy** (Sonnet, 0.2) — answers policy-meaning questions by fanning out to three retriever
-  sub-agents **in parallel** (Returns / Shipping / Warranty knowledge bases) and synthesizing.
-- **Communication** (Sonnet, 0.3) — reads the whole WorkflowState and writes the final, warm reply.
+- **Policy** (Sonnet, 0.2) — answers policy-meaning questions by querying three retriever sub-agents
+  **at the same time** (Returns / Shipping / Warranty knowledge bases) and combining what they find.
+- **Communication** (Sonnet, 0.3) — reads the whole WorkflowState and writes the final reply.
 
 ## A request, step by step
 
@@ -50,12 +50,12 @@ auditable from a single item.
 
 ## Safety, memory, observability
 
-- **Guardrail** (Bedrock) filters harmful content, blocks/anonymizes PII, and denies off-topic
-  subjects (competitors, haggling, legal threats) — while still allowing ordinary arithmetic.
+- **Guardrail** (Bedrock) filters harmful content, blocks or anonymizes PII, and denies off-topic
+  subjects (competitors, haggling, legal threats) while still letting ordinary arithmetic through.
 - **Memory** (AgentCore) keeps a session summary so a multi-turn chat doesn't make the customer
   repeat themselves.
-- **Observability**: every request is one X-Ray trace (Orchestrator → each worker → each KB) and
-  INFO logs go to CloudWatch — the same locally and in the deployed runtime.
+- **Observability** — every request is one X-Ray trace (Orchestrator → each worker → each KB), and
+  INFO logs go to CloudWatch, the same locally and in the deployed runtime.
 
-See `ARCHITECTURE.md` for the component/layer view, `HOW_TO_RUN.md` to deploy and test, and
-`BUILD_LOG.md` for what was actually built, the resource IDs, and the debugging story.
+See `ARCHITECTURE.md` for the component view, `HOW_TO_RUN.md` to deploy and test, and `BUILD_LOG.md`
+for what was built, the resource IDs, and what went wrong on the way.

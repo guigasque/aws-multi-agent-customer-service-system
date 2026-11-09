@@ -1,61 +1,59 @@
-# NovaMart Multi-Agent Customer Support — Project Report & Evidence
+# NovaMart Multi-Agent Customer Support — Evidence
 
 **Amazon Bedrock AgentCore · Strands Agents SDK · Claude Haiku 4.5 (routing) + Sonnet 4.5 (workers)**
 
-A production-minded multi-agent customer support system for the fictional e-commerce company NovaMart.
-A single OrchestratorAgent understands each request and routes it to four specialist worker agents —
-Inventory, Policy (parallel multi-agent RAG over three Knowledge Bases), Refund, and Communication —
-that share state through a DynamoDB `WorkflowState` record. Deployed to AgentCore Runtime with a
-Bedrock Guardrail, AgentCore Memory, and CloudWatch/X-Ray observability. Every capability is
-provisioned as code and verified end-to-end.
+A customer support system for the fictional store NovaMart. One OrchestratorAgent reads each request
+and hands it to the right specialist — Inventory, Policy (which fans out to three Knowledge Bases),
+Refund, or Communication. The workers don't talk to each other; they share a single DynamoDB
+`WorkflowState` record. It runs on AgentCore Runtime with a Bedrock Guardrail, AgentCore Memory, and
+CloudWatch/X-Ray tracing. The AWS resources are created and torn down by code.
 
-**✅ `python tests/test_agent.py all` → 120/120 (100%).**
+`python tests/test_agent.py all` → **120/120**.
 
 | | |
 |---|---|
-| **Runtime** | `udacity_agentcore_runtime` |
-| **ARN** | `…:runtime/udacity_agentcore_runtime-gNqtAS68uD` (us-east-1, acct 053471543567) |
-| **Models** | Orchestrator `us.anthropic.claude-haiku-4-5` · Workers `us.anthropic.claude-sonnet-4-5` |
-| **Infrastructure** | 100% provisioned as code (CloudFormation + boto3 + AgentCore CLI) — no console clicks |
-| **More** | [How it works](../starter/docs/HOW_IT_WORKS.md) · [Architecture](../starter/docs/ARCHITECTURE.md) · [Build log](../starter/docs/BUILD_LOG.md) · [How to run](../starter/docs/HOW_TO_RUN.md) |
+| Runtime | `udacity_agentcore_runtime` |
+| ARN | `…:runtime/udacity_agentcore_runtime-gNqtAS68uD` (us-east-1, acct 053471543567) |
+| Models | Orchestrator `us.anthropic.claude-haiku-4-5` · Workers `us.anthropic.claude-sonnet-4-5` |
+| Infrastructure | CloudFormation + boto3 + AgentCore CLI (no console steps) |
+| More | [How it works](../starter/docs/HOW_IT_WORKS.md) · [Architecture](../starter/docs/ARCHITECTURE.md) · [Build log](../starter/docs/BUILD_LOG.md) · [How to run](../starter/docs/HOW_TO_RUN.md) |
 
 ---
 
-## Results at a glance
+## Score
 
-| Area | Under test | Points | Result |
-|---|---|---|---|
-| Task 2 — Multi-agent graph | 5 agents, tools, models, parallel RAG, routing | 40/40 | ✅ |
-| Task 3 — Guardrail + runtime | Bedrock Guardrail policies + AgentCore Runtime READY | 20/20 | ✅ |
-| Task 4 — Memory | AgentCore Memory, session summary, 7-day | 15/15 | ✅ |
-| Task 5 — Knowledge Bases | 3 KBs ACTIVE/synced + parallel retrieval | 20/20 | ✅ |
-| Task 6 — Observability | CloudWatch INFO logs + X-Ray 100% sampling | 20/20 | ✅ |
-| **Total** | | **120/120** | ✅ |
+| Task | What it checks | Points |
+|---|---|---|
+| 2 — Multi-agent graph | 5 agents, tools, models, parallel RAG, routing | 40/40 |
+| 3 — Guardrail + runtime | Guardrail policies + AgentCore Runtime READY | 20/20 |
+| 4 — Memory | AgentCore Memory, session summary, 7-day | 15/15 |
+| 5 — Knowledge Bases | 3 KBs ACTIVE/synced + parallel retrieval | 20/20 |
+| 6 — Observability | CloudWatch INFO logs + X-Ray 100% sampling | 20/20 |
+| | | **120/120** |
 
-### Test suite — 120/120
+The grader reads live AWS state for Tasks 3–6 (guardrail policy values, runtime status and env vars,
+the memory resource, KB ingestion status, X-Ray/CloudWatch config) — those checks aren't mocked.
 
-The full grader run (`python tests/test_agent.py all`). Top of the run (Tasks 2–5) and the final
-score:
+Top of the run and the final score:
 
 ![Test suite — Tasks 2/3/4/5 passing](t1.png)
 
-![Test suite — Task 6 passing and Score 120/120 (100%)](t-final.png)
+![Test suite — Task 6 passing and Score 120/120](t-final.png)
 
-### X-Ray Service Map
+X-Ray Service Map after `python src/agent_orchestrator.py test` — the orchestrator connected to the
+four workers and the three Knowledge Base nodes:
 
-The full call chain after `python src/agent_orchestrator.py test`: `NovaMart-Orchestrator` connected
-to all four worker agents and the three Knowledge Base nodes.
-
-![X-Ray Service Map — Orchestrator → workers → Knowledge Bases](x-ray.png)
+![X-Ray Service Map — Orchestrator to workers to Knowledge Bases](x-ray.png)
 
 ---
 
 ## Architecture
 
-One OrchestratorAgent (Haiku, deterministic routing) delegates to four Sonnet workers; PolicyAgent
-fans out to three retriever sub-agents in parallel. Workers never call each other — they share one
-DynamoDB `WorkflowState` item with optimistic locking. The guardrail is attached to every agent's
-model.
+The orchestrator (Haiku, temperature 0 so routing is repeatable) hands each request to the Sonnet
+workers. PolicyAgent is itself three retriever sub-agents that run at the same time, one per Knowledge
+Base. Nothing passes between workers directly — each reads and writes the shared `WorkflowState` item,
+which uses a `version` field so two writes can't overwrite each other. The guardrail sits on every
+agent's model.
 
 ```mermaid
 flowchart LR
@@ -76,71 +74,73 @@ flowchart LR
     rt -. memory .-> mem["AgentCore Memory (7-day summary)"]
 ```
 
-Full diagram set (request flow, routing, parallel RAG, ingestion, WorkflowState, provisioning, config,
-observability) is in [`../starter/docs/ARCHITECTURE.md`](../starter/docs/ARCHITECTURE.md).
+The rest of the diagrams — request flow, routing rules, parallel RAG, KB ingestion, the WorkflowState
+lock, the deploy order, config, and tracing — are in
+[`../starter/docs/ARCHITECTURE.md`](../starter/docs/ARCHITECTURE.md).
 
-### How a request flows
-1. `initialize_session` creates a blank `WorkflowState` item keyed by `session_id` (version 0).
-2. The orchestrator routes on intent; each worker reads the current state, does its job, and its
-   output is written back under its column with an optimistic-lock version bump.
-3. `route_to_communication_agent` always runs last and composes the only customer-facing reply — the
-   orchestrator never writes it.
+A request goes: `initialize_session` creates the `WorkflowState` item (version 0); the orchestrator
+routes by intent and each worker reads the current state, does its part, and writes its result back
+under its own column with a version bump; `route_to_communication_agent` runs last and writes the
+reply. The orchestrator never writes the customer-facing text itself.
 
 ---
 
-## Test evidence
-
-The grader (`python tests/test_agent.py all`) reads real AWS state for Tasks 3–6 (guardrail policy
-values, runtime status/env, memory resource, KB ingestion, X-Ray/CloudWatch config) — nothing mocked.
+## What was tested
 
 ### Scenario 1 — Return (CUST-001, ORD-27176)
-- **Prompt:** "I want to return my wireless headphones from order ORD-27176"
-- **Routing:** `initialize_session → route_to_inventory_agent → route_to_refund_agent → route_to_communication_agent`
-- **Result:** ✅ Inventory read the order (delivered, Wireless Headphones Pro) and Premium tier →
-  Refund applied the 60-day window, eligible, issued a return reference (e.g. `RET-8CA64698`) →
-  Communication wrote the reply. All four worker X-Ray nodes present.
+Prompt: *"I want to return my wireless headphones from order ORD-27176"*
+
+Routes `initialize_session → inventory → refund → communication`. Inventory finds the order
+(delivered, Wireless Headphones Pro) and the Premium tier; Refund applies the 60-day Premium window,
+finds it eligible, and issues a return reference (e.g. `RET-8CA64698`); Communication writes the
+reply. All four worker nodes show up in the trace.
 
 ### Scenario 2 — Policy question (CUST-002)
-- **Prompt:** "What is the return policy for premium customers?"
-- **Routing:** `initialize_session → route_to_policy_agent → route_to_communication_agent`
-- **Path:** PolicyAgent → `search_all_policies` fans out to ReturnsRetriever (`KXERZFZZVB`),
-  ShippingRetriever (`L1EHXML1CO`), WarrantyRetriever (`JKBVLCTK3Z`) **in parallel** (ThreadPoolExecutor)
-- **Result:** ✅ Grounded answer — 60-day Premium return window, 3-year electronics warranty, free
-  expedited shipping. Three `KnowledgeBase:*` X-Ray nodes present. (~6–10s, parallel not serial.)
+Prompt: *"What is the return policy for premium customers?"*
+
+Routes `initialize_session → policy → communication`. `search_all_policies` queries the three KBs at
+once — ReturnsRetriever (`KXERZFZZVB`), ShippingRetriever (`L1EHXML1CO`), WarrantyRetriever
+(`JKBVLCTK3Z`) — and the answer stays grounded in what they return: 60-day Premium window, 3-year
+electronics warranty, free expedited shipping. All three `KnowledgeBase:*` nodes appear in the trace.
+The three retrievals overlap, so the whole fan-out takes about as long as one of them (~6–10s) rather
+than three in a row.
 
 ![Parallel retrieval — all three retrievers return, search_all_policies passes](t2.png)
 
 ### Scenario 3 — Math (CUST-003)
-- **Prompt:** "How much would 5 items at $29.99 be with a 10% discount?"
-- **Routing:** `initialize_session → route_to_communication_agent` (skips Inventory/Policy/Refund)
-- **Result:** ✅ 5 × $29.99 = $149.95, −10% = **$134.96**. Critically, the guardrail **allows** this
-  arithmetic (see below).
+Prompt: *"How much would 5 items at $29.99 be with a 10% discount?"*
 
-### Guardrail behavior (ApplyGuardrail probe)
+Routes `initialize_session → communication` and skips Inventory/Policy/Refund. Answer: 5 × $29.99 =
+$149.95, minus 10% = **$134.96**. The point of this scenario is that the guardrail has to let the
+arithmetic through (see below).
+
+### Guardrail
+Checked directly with the ApplyGuardrail API:
+
 | Input | Action |
 |---|---|
-| "How much is 5 items at $29.99 with a 10% discount?" | `NONE` (allowed) — input **and** output |
-| "Can you lower the price? I want to haggle." | `GUARDRAIL_INTERVENED` (blocked) |
-| "Is Amazon's version cheaper and better?" | `GUARDRAIL_INTERVENED` (blocked) |
-| "I'll sue NovaMart if you don't refund me." | `GUARDRAIL_INTERVENED` (blocked) |
+| "How much is 5 items at $29.99 with a 10% discount?" | `NONE` — allowed (input and output) |
+| "Can you lower the price? I want to haggle." | `GUARDRAIL_INTERVENED` — blocked |
+| "Is Amazon's version cheaper and better?" | `GUARDRAIL_INTERVENED` — blocked |
+| "I'll sue NovaMart if you don't refund me." | `GUARDRAIL_INTERVENED` — blocked |
 
-The "pricing negotiations" DENY topic is defined narrowly (haggling / changing an advertised price)
-and explicitly excludes arithmetic with an already-stated price and discount — avoiding the known
-false-positive that would otherwise block the math scenario.
+The "pricing negotiations" topic is written narrowly — haggling or asking to change an advertised
+price — and says in so many words that it does not cover arithmetic on a price and discount that are
+already given. Without that wording the Classic tier blocked the math scenario; this is the one thing
+in the guardrail config that needed care.
 
-### Deployed-runtime invocation (full production path)
+### Deployed runtime
 ```
 python src/agent_orchestrator.py invoke "What is the return policy for premium customers?" CUST-002
 ```
-✅ Returned a grounded, guardrailed reply through AgentCore Runtime (not just local), with a published
-X-Ray trace.
+Goes through the actual AgentCore Runtime (not the local path) and comes back with a grounded,
+guardrailed reply and an X-Ray trace.
 
 ---
 
-## Infrastructure as code (no console)
+## Infrastructure
 
-Every AWS resource is created and destroyed by code. One command each way for provisioning, the
-pipeline, and teardown:
+Everything is created and deleted from code — there are no console steps.
 
 ```bash
 # Foundation (once)
@@ -148,17 +148,17 @@ aws cloudformation deploy --template-file infrastructure/starter_stack.yaml \
   --stack-name udacity-agentcore --capabilities CAPABILITY_NAMED_IAM --region us-east-1
 python infrastructure/seed_data.py
 
-# Knowledge Bases — by code (describe-or-create, sync, write .env)
+# Knowledge Bases (describe-or-create, sync, write the IDs into .env)
 python infrastructure/create_knowledge_bases.py
 
-# Guardrail → runtime → memory → observability
+# Guardrail, runtime, memory, observability
 python src/agent_orchestrator.py deploy
 
-# Teardown (idempotent, reverse order)
+# Teardown
 python infrastructure/cleanup.py --yes
 ```
 
-**Provisioned for this run:**
+What this run provisioned:
 
 | Resource | Identifier |
 |---|---|
@@ -166,36 +166,35 @@ python infrastructure/cleanup.py --yes
 | Returns KB | `KXERZFZZVB` (S3 Vectors, Titan Embed Text v2) |
 | Shipping KB | `L1EHXML1CO` |
 | Warranty KB | `JKBVLCTK3Z` |
-| Guardrail | `udacity-agentcore-guardrail` → `y7qxjyotoito` version **1** |
+| Guardrail | `udacity-agentcore-guardrail` → `y7qxjyotoito` version 1 |
 | AgentCore Runtime | `udacity_agentcore_runtime-gNqtAS68uD` (READY, PUBLIC, HTTP) |
 | AgentCore Memory | `udacity_agentcore_memory-8YT1e95xsJ` (session summary, 7-day) |
 | Vector store | `udacity-agentcore-vectors-053471543567-b71f0d60` + 3 indexes (1024-dim, cosine) |
 
-**Design choice worth noting:** the KBs are backed by **S3 Vectors** instead of OpenSearch
-Serverless — simpler to script and no always-on idle cost.
+The KBs sit on S3 Vectors rather than OpenSearch Serverless — easier to script and nothing bills while
+it's idle.
 
 ---
 
-## Engineering highlights
+## Notes on the implementation
 
-- **Shared state, not chatter** — workers never call each other; they coordinate through one DynamoDB
-  `WorkflowState` item with version-based optimistic locking, so the whole request is auditable from a
-  single record and concurrent writes can't clobber each other.
-- **Parallel multi-agent RAG** — `search_all_policies` fans out to three retriever sub-agents via
-  `ThreadPoolExecutor(max_workers=3)` + `as_completed()`, so three-KB latency ≈ the slowest single
-  retrieval, not the sum.
-- **Guardrail tuned for the real workload** — STANDARD safeguard tier + cross-region profile, with
-  "pricing negotiations" scoped so legitimate arithmetic passes while haggling/competitor/legal-threat
-  are blocked (verified by direct ApplyGuardrail probes).
-- **KBs by code** — a new idempotent `create_knowledge_bases.py` provisions the three S3 Vectors KBs
-  and writes their IDs back into `.env`; the one API quirk hit (S3 Vectors rejects `indexArn` +
-  `indexName` together) is documented in the build log with its fix.
-- **Graceful tools** — DynamoDB and retrieval tools catch specific exceptions and return readable
-  messages, so one flaky lookup never sinks a conversation.
-- **Reproducible, reversible** — pinned deps, idempotent provisioning, one-command teardown.
+- Workers share one DynamoDB `WorkflowState` item instead of calling each other. Writes are guarded by
+  a `version` field (optimistic lock), so a request is readable from one record and two concurrent
+  writes don't clobber each other — the loser re-reads and retries.
+- `search_all_policies` runs the three retrievers with `ThreadPoolExecutor(max_workers=3)` +
+  `as_completed()` instead of one after another.
+- The guardrail uses the STANDARD tier and a cross-region profile; the "pricing negotiations" topic is
+  scoped so the math scenario passes (confirmed with the ApplyGuardrail probes above).
+- `create_knowledge_bases.py` is safe to re-run — it reuses KBs that already exist and writes the IDs
+  back into `.env`. The S3 Vectors create call rejects `indexArn` and `indexName` together; the fix
+  (pass only `indexArn`) is in the build log.
+- The DynamoDB and retrieval tools catch their own errors and return a readable message rather than
+  throwing into the agent loop.
+- Dependencies are pinned, provisioning is idempotent, and teardown is one command.
 
-The debugging story (wrong initial IAM account, sandbox token expiry, the S3 Vectors KB API quirk) is
-written up in [`../starter/docs/BUILD_LOG.md`](../starter/docs/BUILD_LOG.md).
+The things that went wrong along the way — the wrong IAM account at the start, the sandbox token
+expiring mid-run, the S3 Vectors create quirk — are in
+[`../starter/docs/BUILD_LOG.md`](../starter/docs/BUILD_LOG.md).
 
 ---
 
@@ -204,10 +203,10 @@ written up in [`../starter/docs/BUILD_LOG.md`](../starter/docs/BUILD_LOG.md).
 ```bash
 cd starter && source .venv/bin/activate && set -a; source .env; set +a
 
-# Grader (120/120)
+# Grader
 python tests/test_agent.py all
 
-# Three scenarios locally (publishes X-Ray traces for the Service Map)
+# Three scenarios locally (also publishes the X-Ray traces)
 python src/agent_orchestrator.py test
 
 # Deployed runtime
@@ -215,20 +214,20 @@ python src/agent_orchestrator.py invoke "What is the return policy for premium c
 python src/agent_orchestrator.py invoke "I want to return my order ORD-27176" CUST-001
 ```
 
-**X-Ray Service Map:** AWS Console → CloudWatch → X-Ray traces → Service map → "Last 15 minutes"
-(allow 30–60s after a run). Shows `NovaMart-Orchestrator` → InventoryAgent / RefundAgent / PolicyAgent
-/ CommunicationAgent → KnowledgeBase:returns / :shipping / :warranty.
+For the Service Map: CloudWatch → X-Ray traces → Service map → "Last 15 minutes" (give it 30–60s
+after a run). You should see `NovaMart-Orchestrator` linked to InventoryAgent, RefundAgent,
+PolicyAgent, CommunicationAgent, and the three `KnowledgeBase:*` nodes.
 
 ---
 
-## Files in this folder
+## Files here
 
 | File | What it shows |
 |---|---|
-| `t1.png` | `test_agent.py all` — Tasks 2/3/4 + Task 5 KB checks PASS |
-| `t2.png` | Parallel retrieval detail — all three retrievers return, `search_all_policies` PASS |
-| `t-final.png` | Task 6 PASS and **Score: 120/120 pts (100%)** |
-| `x-ray.png` | X-Ray Service Map — full Orchestrator → worker → KnowledgeBase call chain |
+| `t1.png` | `test_agent.py all` — Tasks 2/3/4 and the Task 5 KB checks passing |
+| `t2.png` | The three retrievers returning and `search_all_policies` passing |
+| `t-final.png` | Task 6 passing and the 120/120 total |
+| `x-ray.png` | The Service Map — orchestrator, workers, Knowledge Bases |
 
-Screenshots use non-secret identifiers only (session/request/trace IDs, account ID, resource IDs); no
-credentials are shown.
+Only non-secret identifiers appear in the screenshots (session, request, and trace IDs, the account
+ID, resource IDs) — no credentials.

@@ -606,8 +606,7 @@ def build_communication_agent() -> Agent:
     """
     Build the Communication Agent.
 
-    Drafts the final customer-facing message by reading the full WorkflowState
-    and composing a coherent, empathetic response.
+    Reads the full WorkflowState and writes the final reply the customer sees.
     """
 
     model = BedrockModel(
@@ -622,12 +621,12 @@ def build_communication_agent() -> Agent:
         "Rules:\n"
         "- ALWAYS call get_full_workflow_context first to read everything the other agents "
         "found (order facts, policy answers, refund decisions).\n"
-        "- Compose ONE clear, complete reply that answers the customer's request and includes "
+        "- Write ONE clear, complete reply that answers the customer's request and includes "
         "every relevant detail from the previous agents (order status, eligibility, reference "
         "numbers, policy specifics, calculation results).\n"
-        "- Tone: warm, professional, and empathetic. Write like a helpful human support agent, "
-        "not a form letter. Do not invent facts that are not in the workflow context.\n"
-        "- If a request was a plain calculation, state the result clearly."
+        "- Keep a friendly, helpful tone and sound like a person, not a form letter. Do not "
+        "state facts that are not in the workflow context.\n"
+        "- If the request was a plain calculation, give the result directly."
     )
 
     @tool

@@ -1,20 +1,19 @@
 # Architecture — NovaMart Multi-Agent Customer Support
 
-Rendered diagrams (Mermaid) and prose for the Amazon Bedrock AgentCore + Strands multi-agent support
-system. Diagrams are text (diff-friendly, no binaries) and render natively on GitHub. They are kept
-consistent with the implementation; see
-[`../.kiro/specs/novamart-multi-agent/design.md`](../.kiro/specs/novamart-multi-agent/design.md) for
-the authoritative design and [`BUILD_LOG.md`](BUILD_LOG.md) for the build log.
+Mermaid diagrams and notes for the AgentCore + Strands support system. The diagrams are text so they
+diff cleanly and render on GitHub. The authoritative design is in
+[`../.kiro/specs/novamart-multi-agent/design.md`](../.kiro/specs/novamart-multi-agent/design.md); the
+build log is [`BUILD_LOG.md`](BUILD_LOG.md).
 
 ---
 
 ## (a) System architecture
 
-The deployed system runs in the AgentCore Runtime. One OrchestratorAgent (Haiku) routes each request
-to four Sonnet worker agents; the PolicyAgent itself fans out to three retriever sub-agents, one per
-Bedrock Knowledge Base. Workers never call each other — they share a single DynamoDB `WorkflowState`
-record (optimistic locking). A Bedrock Guardrail is attached to every agent's model; AgentCore Memory
-holds a per-session summary; X-Ray + CloudWatch trace and log every request.
+The system runs in AgentCore Runtime. The OrchestratorAgent (Haiku) routes each request to one of four
+Sonnet workers; PolicyAgent is itself three retriever sub-agents, one per Knowledge Base. The workers
+don't call each other — they share one DynamoDB `WorkflowState` record, with a `version` field for
+optimistic locking. The guardrail is on every agent's model; AgentCore Memory keeps a per-session
+summary; X-Ray and CloudWatch trace and log each request.
 
 ```mermaid
 flowchart LR
@@ -55,18 +54,17 @@ flowchart LR
 ```
 
 Everything except the foundation CloudFormation stack (DynamoDB, S3, S3 Vectors, IAM role, log group)
-is provisioned as code by `src/agent_orchestrator.py` (guardrail, runtime, memory, observability) and
-`infrastructure/create_knowledge_bases.py` (the three KBs). The Runtime is deployed by the AgentCore
-CLI.
+is created from code: `src/agent_orchestrator.py` for the guardrail, runtime, memory, and
+observability, and `infrastructure/create_knowledge_bases.py` for the three KBs. The runtime itself is
+deployed by the AgentCore CLI.
 
 ---
 
 ## (b) Single-request flow (return scenario)
 
-An order/return request routes `initialize_session → Inventory → Refund → Communication`. Each worker
-reads the current `WorkflowState`, does its job, and its output is written back under its own column
-with an optimistic-lock version bump. Communication always runs last and writes the only
-customer-facing text.
+A return request routes `initialize_session → Inventory → Refund → Communication`. Each worker reads
+the current `WorkflowState`, does its part, and writes its result back under its own column with a
+version bump. Communication runs last and writes the only text the customer sees.
 
 ```mermaid
 sequenceDiagram
@@ -86,15 +84,16 @@ sequenceDiagram
     R->>WS: get_inventory_context, apply tier window, initiate_refund → write refund_agent (v2)
     O->>M: route_to_communication_agent (read state v2)
     M->>WS: get_full_workflow_context (read all columns)
-    M-->>C: final warm, grounded reply (orchestrator never writes it)
+    M-->>C: final reply (orchestrator never writes it)
 ```
 
 ---
 
 ## (c) Orchestrator routing decision
 
-The Haiku orchestrator (temperature 0.0, deterministic) routes on intent per the six system-prompt
-rules. `initialize_session` always runs first; `route_to_communication_agent` always runs last.
+The orchestrator runs at temperature 0 so routing is repeatable. It routes on intent per the six
+system-prompt rules. `initialize_session` always runs first; `route_to_communication_agent` always
+runs last.
 
 ```mermaid
 flowchart TD
@@ -111,19 +110,19 @@ flowchart TD
     comm --> done(["Final customer-facing response"])
 ```
 
-Rule 4 is the subtle one: account/tier questions go to **Inventory** (it holds customer data), never
-**Policy** (which only knows policy text). Rule 5 keeps pure arithmetic away from the data workers but
-still routes the answer through Communication.
+Rule 4 is the one worth calling out: account/tier questions go to Inventory (it has the customer
+data), not Policy (which only has policy text). Rule 5 keeps plain arithmetic away from the data
+workers but still routes the answer through Communication.
 
 ---
 
 ## (d) Parallel multi-agent RAG — PolicyAgent
 
-A policy question calls `search_all_policies`, which fans out to three retriever sub-agents
-concurrently via `ThreadPoolExecutor(max_workers=3)` + `as_completed()`. Each retriever queries one
-Bedrock Knowledge Base (Retrieve API over an S3 Vectors index); the coordinator synthesizes the three
-results into one grounded answer. Running in parallel keeps total latency ≈ the slowest single
-retrieval, not the sum.
+A policy question calls `search_all_policies`, which runs the three retriever sub-agents at the same
+time via `ThreadPoolExecutor(max_workers=3)` + `as_completed()`. Each retriever hits one Knowledge
+Base (the Retrieve API over an S3 Vectors index); the coordinator combines the three results into one
+answer. Because they overlap, the fan-out takes about as long as the slowest single retrieval instead
+of all three added up.
 
 ```mermaid
 flowchart LR
@@ -154,16 +153,16 @@ flowchart LR
     end
 ```
 
-The KB holds a snapshot taken at ingestion. `infrastructure/create_knowledge_bases.py` is idempotent
-(describe-or-create by name); re-running it re-uses existing KBs and re-syncs only if needed.
+The KB content is a snapshot from ingestion time. `infrastructure/create_knowledge_bases.py` is safe
+to re-run — it reuses KBs that already exist and only re-syncs when needed.
 
 ---
 
 ## (e) Shared WorkflowState & optimistic locking
 
-The single source of per-request truth is one DynamoDB item keyed by `session_id`. Each worker's
-output lands in its own column; every write is a conditional update guarded by `version`, so
-concurrent writers can't clobber each other — a losing writer re-reads and retries.
+Per-request state lives in one DynamoDB item keyed by `session_id`. Each worker writes to its own
+column, and every write is a conditional update guarded by `version`. If two writers race, the one
+whose version is stale fails the condition, re-reads, and retries.
 
 ```mermaid
 flowchart TD
@@ -179,9 +178,9 @@ flowchart TD
 
 ## (f) Deployment / provisioning order (all code)
 
-Resources are created in dependency order, then verified, then torn down in reverse. The order in
-`deploy_all()` is load-bearing: `configure_observability` re-runs `agentcore deploy` to push env
-vars, so it must come **after** the runtime exists.
+Resources are created in dependency order, then torn down in reverse. The order in `deploy_all()`
+matters in one place: `configure_observability` re-runs `agentcore deploy` to push env vars, so it has
+to come after the runtime already exists.
 
 ```mermaid
 flowchart TD
@@ -197,16 +196,17 @@ flowchart TD
     v --> td["Teardown (reverse): cleanup.py --yes"]
 ```
 
-The first `agentcore deploy` also bootstraps CDK (`CDKToolkit` stack). Teardown is idempotent and
-best-effort — run it twice to confirm the async KB/AgentCore deletes finished.
+The first `agentcore deploy` also bootstraps CDK (the `CDKToolkit` stack). Teardown is best-effort and
+safe to re-run — run it twice to let the async KB/AgentCore deletes finish.
 
 ---
 
 ## (g) Configuration & credentials flow
 
-`config.py` is the read path: resource names resolve lazily from CloudFormation **exports** (cached);
-KB IDs, runtime ARN, and guardrail id/version come from `.env`. Provisioning scripts close the loop by
-writing IDs back into `.env`. Temporary sandbox credentials also live in `.env` and are gitignored.
+`config.py` is the read side: resource names come from CloudFormation exports (resolved lazily and
+cached); the KB IDs, runtime ARN, and guardrail id/version come from `.env`. The provisioning scripts
+write those IDs back into `.env` once they exist. The sandbox credentials also live in `.env`, which
+is gitignored.
 
 ```mermaid
 flowchart LR
@@ -218,9 +218,9 @@ flowchart LR
     cli["AgentCore CLI"] -->|"agentcore.json env vars"| runtime["deployed runtime<br/>(same values at runtime)"]
 ```
 
-No value is hand-edited twice: CloudFormation owns resource names, the provisioning scripts own the
-IDs they create, and both feed a single `.env` + `config.py` read path used identically by local runs
-and the deployed runtime.
+So there's one place each value comes from: CloudFormation owns the resource names, the provisioning
+scripts own the IDs they create, and both feed the same `.env` + `config.py` that local runs and the
+deployed runtime read.
 
 ---
 
@@ -246,10 +246,10 @@ and the deployed runtime.
 ## (h) Observability path
 
 Each request opens one X-Ray segment (`NovaMart-Orchestrator`). The traced `@tool` decorator
-(`agent_observability.py`) opens a remote subsegment per `route_to_*` tool (→ worker node) and per KB
-retrieval (→ `KnowledgeBase:*` node), so the Service Map shows the full call chain. Segments are
-published with `xray:PutTraceSegments` identically from local runs (`test`/`chat`/`demo`) and inside
-the deployed runtime (`invoke`). INFO logs ship to the project CloudWatch log group.
+(`agent_observability.py`) opens a remote subsegment per `route_to_*` tool (the worker nodes) and per
+KB retrieval (the `KnowledgeBase:*` nodes), which is what draws the full chain on the Service Map.
+Segments are published with `xray:PutTraceSegments` the same way from local runs (`test`/`chat`/`demo`)
+and from inside the deployed runtime (`invoke`). INFO logs go to the project CloudWatch log group.
 
 ```mermaid
 flowchart LR
